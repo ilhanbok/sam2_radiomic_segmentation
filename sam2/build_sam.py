@@ -14,6 +14,8 @@ from omegaconf import OmegaConf
 
 import sam2
 
+
+from torch.cuda.amp import autocast
 # Check if the user is running Python from the parent directory of the sam2 repo
 # (i.e. the directory where this repo is cloned into) -- this is not supported since
 # it could shadow the sam2 package and cause issues.
@@ -77,24 +79,25 @@ def build_sam2(
     apply_postprocessing=True,
     **kwargs,
 ):
+    with autocast(enabled=True, dtype=torch.float16):
 
-    if apply_postprocessing:
-        hydra_overrides_extra = hydra_overrides_extra.copy()
-        hydra_overrides_extra += [
-            # dynamically fall back to multi-mask if the single mask is not stable
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
-        ]
-    # Read config and init model
-    cfg = compose(config_name=config_file, overrides=hydra_overrides_extra)
-    OmegaConf.resolve(cfg)
-    model = instantiate(cfg.model, _recursive_=True)
-    _load_checkpoint(model, ckpt_path)
-    model = model.to(device)
-    if mode == "eval":
-        model.eval()
-    return model
+        if apply_postprocessing:
+            hydra_overrides_extra = hydra_overrides_extra.copy()
+            hydra_overrides_extra += [
+                # dynamically fall back to multi-mask if the single mask is not stable
+                "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
+                "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
+                "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
+            ]
+        # Read config and init model
+        cfg = compose(config_name=config_file, overrides=hydra_overrides_extra)
+        OmegaConf.resolve(cfg)
+        model = instantiate(cfg.model, _recursive_=True)
+        _load_checkpoint(model, ckpt_path)
+        model = model.to(device)#, dtype=torch.float16) # need to check if this makes sense Ilhan Bok ibok@wisc.edu 01102025
+        if mode == "eval":
+            model.eval()
+        return model
 
 
 def build_sam2_video_predictor(
@@ -107,38 +110,40 @@ def build_sam2_video_predictor(
     vos_optimized=False,
     **kwargs,
 ):
-    hydra_overrides = [
-        "++model._target_=sam2.sam2_video_predictor.SAM2VideoPredictor",
-    ]
-    if vos_optimized:
+    with autocast(enabled=True, dtype=torch.float16):
         hydra_overrides = [
-            "++model._target_=sam2.sam2_video_predictor.SAM2VideoPredictorVOS",
-            "++model.compile_image_encoder=True",  # Let sam2_base handle this
+            "++model._target_=sam2.sam2_video_predictor.SAM2VideoPredictor",
         ]
+        if vos_optimized:
+            hydra_overrides = [
+                "++model._target_=sam2.sam2_video_predictor.SAM2VideoPredictorVOS",
+                "++model.compile_image_encoder=True",  # Let sam2_base handle this
+            ]
 
-    if apply_postprocessing:
-        hydra_overrides_extra = hydra_overrides_extra.copy()
-        hydra_overrides_extra += [
-            # dynamically fall back to multi-mask if the single mask is not stable
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
-            # the sigmoid mask logits on interacted frames with clicks in the memory encoder so that the encoded masks are exactly as what users see from clicking
-            "++model.binarize_mask_from_pts_for_mem_enc=true",
-            # fill small holes in the low-res masks up to `fill_hole_area` (before resizing them to the original video resolution)
-            "++model.fill_hole_area=8",
-        ]
-    hydra_overrides.extend(hydra_overrides_extra)
+        if apply_postprocessing:
+            hydra_overrides_extra = hydra_overrides_extra.copy()
+            hydra_overrides_extra += [
+                # dynamically fall back to multi-mask if the single mask is not stable
+                "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
+                "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
+                "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
+                # the sigmoid mask logits on interacted frames with clicks in the memory encoder so that the encoded masks are exactly as what users see from clicking
+                "++model.binarize_mask_from_pts_for_mem_enc=true",
+                # fill small holes in the low-res masks up to `fill_hole_area` (before resizing them to the original video resolution)
+                "++model.fill_hole_area=8",
+            ]
+        hydra_overrides.extend(hydra_overrides_extra)
 
-    # Read config and init model
-    cfg = compose(config_name=config_file, overrides=hydra_overrides)
-    OmegaConf.resolve(cfg)
-    model = instantiate(cfg.model, _recursive_=True)
-    _load_checkpoint(model, ckpt_path)
-    model = model.to(device)
-    if mode == "eval":
-        model.eval()
-    return model
+        # Read config and init model
+        cfg = compose(config_name=config_file, overrides=hydra_overrides)
+        OmegaConf.resolve(cfg)
+        model = instantiate(cfg.model, _recursive_=True)
+        _load_checkpoint(model, ckpt_path)
+        model = model.to(device)
+        #model=model.half()#ibok@wisc.edu line change
+        if mode == "eval":
+            model.eval()
+        return model
 
 
 def _hf_download(model_id):

@@ -12,6 +12,8 @@ import torch.nn.functional as F
 
 from tqdm import tqdm
 
+import numpy as np
+
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
 
@@ -617,7 +619,7 @@ class SAM2VideoPredictor(SAM2Base):
                     "reverse": reverse
                 }
                 pred_masks_per_obj[obj_idx] = pred_masks
-
+                ''' EDITED CODE '''
             # Resize the output mask to the original video resolution (we directly use
             # the mask scores on GPU for output to avoid any CPU conversion in between)
             if len(pred_masks_per_obj) > 1:
@@ -627,7 +629,26 @@ class SAM2VideoPredictor(SAM2Base):
             _, video_res_masks = self._get_orig_video_res_output(
                 inference_state, all_pred_masks
             )
+
+            # Check if pred masks is blank. If so, then return list so far
+            quit_out = True
+            print('ENTERING LOOP')
+            for mask in all_pred_masks:
+                print('ANALYZING MASKS!!!!!')
+                arr = mask.cpu().numpy().flatten()
+                print(arr)
+                print(arr[0])
+                print(np.equal(arr, arr[0]))
+                print(np.all(np.equal(arr, arr[0])))
+                if not np.all(np.equal(arr, arr[0])):
+                    print('breaking out of quit loop')
+                    quit_out = False
+                    break
+
             yield frame_idx, obj_ids, video_res_masks
+            if quit_out:
+                print('Non-contiguity detected during video prediction. Exiting for loop.')
+                break
 
     @torch.inference_mode()
     def clear_all_prompts_in_frame(
